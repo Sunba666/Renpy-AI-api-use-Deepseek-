@@ -1,6 +1,6 @@
 # Renpy api use
 
-这是一个使用 DeepSeek API 的 Ren'Py 引入式代码块，可以在游戏中与AI交流（目前在优化中）
+这是一个使用 DeepSeek API 的 Ren'Py 引入式代码块，能与AI交流（能实现日常交流和历史消息同步）
 
 ## 配置 API 密钥
 
