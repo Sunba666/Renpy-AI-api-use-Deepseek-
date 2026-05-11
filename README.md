@@ -1,4 +1,4 @@
-# 你的游戏名字
+# Renpy api use
 
 这是一个使用 DeepSeek API 的 Ren'Py 引入式代码块，可以在游戏中与AI交流（目前在优化中）
 
