@@ -8,3 +8,7 @@
 2. 在 `game/` 文件夹下复制 `deepseek_config.example.json` 并重命名为 `deepseek_config.json`。
 3. 将你的 API Key 填入 `deepseek_config.json` 中。
 4. 运行游戏即可使用 AI 对话功能。
+
+### 其他
+1.目前仍在优化中，打算之后引入多个AI模型
+2.目前仅支持聊天功能，为游戏内部玩法设定
