@@ -1,16 +1,11 @@
-﻿# 排除 API 密钥
-game/deepseek_config.json
-
-# 排除 Ren'Py 编译文件
+﻿deepseek_config.json
 *.rpyc
+*.rpyb
 cache/
 __pycache__/
-
-# 排除编辑器临时文件
+saves/
 *.swp
 *~
 .DS_Store
-
-# 排除 Ren'Py 日志
 log.txt
 errors.txt
