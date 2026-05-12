@@ -1,14 +1,18 @@
 ﻿# 游戏的脚本可置于此文件中。
-
 # 声明此游戏使用的角色。颜色参数可使角色姓名着色。
-
-define e = Character("艾琳")
 
 
 # 游戏在此开始。
 
 label start:
+    show bj1 with dissolve
     "你醒来，发现自己在一个陌生的房间。"
+    show eileen neutral with dissolve:
+        zoom 0.9
+        xalign 0.5
+        yalign 0.5
+        xpos 1050
+        ypos 650
     menu:
         "你想做什么？"
         "找 AI 聊天":

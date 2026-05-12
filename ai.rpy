@@ -4,6 +4,55 @@ default player_input_text = ""
 #存放对话历史
 default conversation_history = []   # 存储 {"role": "user"/"assistant", "content": "..."}
 
+# 定义各个表情的图片（放在 images/ 目录）
+image eileen neutral = "images/eileen emoji/eileen_neutral.png"
+image eileen neutral:
+    "images/eileen emoji/eileen_neutral.png"
+    zoom 0.8
+    xalign 0.5
+    yalign 0.5
+    xpos 1050
+    ypos 600
+
+image eileen happy   = "images/eileen emoji/eileen_happy.png"
+image eileen happy:
+    "images/eileen emoji/eileen_happy.png"
+    zoom 0.4
+    xalign 0.5
+    yalign 0.5
+    xpos 1050
+    ypos 700
+
+image eileen sad = "images/eileen emoji/eileen_sad.png"
+image eileen sad:
+    "images/eileen emoji/eileen_sad.png"
+    zoom 0.5
+    xalign 0.5
+    yalign 0.5
+    xpos 1050
+    ypos 700
+
+image eileen angry = "images/eileen emoji/eileen_angry.png"
+image eileen angry:
+    "images/eileen emoji/eileen_angry.png"
+    zoom 0.5
+    xalign 0.5
+    yalign 0.5
+    xpos 1050
+    ypos 700
+
+image eileen surprised = "images/eileen emoji/eileen_surprised.png"
+image eileen surprised:
+    "images/eileen emoji/eileen emoji/eileen_surprised.png"
+    zoom 0.5
+    xalign 0.5
+    yalign 0.5
+    xpos 1050
+    ypos 700
+
+# 定义一个角色，使用中立表情为默认
+define e = Character("艾琳", image="eileen neutral")
+
 # ai_integration.rpy
 init -1 python:
     import json
@@ -33,8 +82,10 @@ init -1 python:
 
     # 分页函数
     def split_text_into_pages(text, max_chars_per_page=400):
-
-        """按最大字符数切分文本，尽量在句号、逗号处断开"""
+        if not isinstance(text, str):
+            text = str(text)
+        if not text:
+            return ["(没有内容)"]
         pages = []
         while len(text) > max_chars_per_page:
             split_pos = text.rfind('。', 0, max_chars_per_page)
@@ -53,6 +104,35 @@ init -1 python:
     API_KEY = load_api_key()
     if not API_KEY:
         renpy.notify("警告：找不到 deepseek_config.json 或 API Key，请创建配置文件。")
+
+    # 情绪关键词映射表
+    emotion_map = {
+        "happy": ["开心", "高兴", "喜欢", "爱", "棒", "好", "幸福", "笑"],
+        "sad": ["难过", "伤心", "哭", "遗憾", "失望", "痛苦", "孤独"],
+        "angry": ["生气", "愤怒", "恨", "讨厌", "可恶", "滚", "烦"],
+        "surprised": ["惊讶", "居然", "天哪", "哇", "真的吗", "什么"],
+    }
+    default_emotion = "neutral"
+
+    def analyze_emotion(text):
+        happy_kw = ["开心", "高兴", "喜欢", "爱", "棒", "好", "幸福"]
+        sad_kw = ["难过", "伤心", "哭", "遗憾", "失望", "痛苦"]
+        angry_kw = ["生气", "愤怒", "恨", "讨厌", "可恶"]
+        surprised_kw = ["惊讶", "居然", "天哪", "哇", "真的吗"]
+        text_lower = text.lower()
+        for kw in happy_kw:
+            if kw in text_lower:
+                return "happy"
+        for kw in sad_kw:
+            if kw in text_lower:
+                return "sad"
+        for kw in angry_kw:
+            if kw in text_lower:
+                return "angry"
+        for kw in surprised_kw:
+            if kw in text_lower:
+                return "surprised"
+        return "neutral"
 
     def ai_request_thread(user_message):
         global ai_response_text, ai_request_finished, ai_request_error
@@ -135,15 +215,15 @@ screen ai_input_screen():
 # 游戏内对话
 label ai_chat:
     if len(conversation_history) == 0:
-        "【系统】现在是连续对话模式，你可以一直聊，输入“再见”结束。"
+        e neutral "现在是连续聊天模式，输入“再见”结束。"
     $ chatting = True
     while chatting:
-        $ player_input = renpy.input("和你说话：", length=200)
-        $ player_input = player_input.strip()
+        $ player_input = renpy.input("和你说话：", length=200).strip()
         if player_input == "":
-            "你什么也没说。"
+            e neutral "你什么也没说。"
+            # 跳过本次循环，直接进入下一轮
         elif player_input == "再见":
-            "你结束了对话。"
+            e neutral "那下次再聊吧。"
             $ chatting = False
         else:
             show screen ai_thinking_screen
@@ -151,9 +231,12 @@ label ai_chat:
             while not is_ai_finished():
                 $ renpy.pause(0.1)
             hide screen ai_thinking_screen
-            $ ai_response_text = get_ai_response()
-            call show_paged_text(ai_response_text)
-            $ renpy.pause(0.3)
+            $ ai_text = get_ai_response()
+            
+            $ emo = analyze_emotion(ai_text)
+            $ renpy.show("eileen " + emo)
+            call show_paged_text(ai_text)
+            $ renpy.pause(0.2)
     return
 
 #分页显示长文本
@@ -173,12 +256,14 @@ label show_paged_text(ai_reply):
 
 screen paged_text_screen(t, current, total):
     frame:
-        xalign 0.5 yalign 0.5
+        xalign 0.15
+        yalign 1.0                 # 底部对齐
+        yoffset -50                # 向上偏移50像素（可选，避免贴边）
         xsize 800
-        background "#000000dd"
+        background "#00000056"     # 半透明黑色背景，透出立绘
         padding (20, 20)
         vbox:
-            text "[t]" size 26 color "#fff" xmaximum 760
+            text "[t]" size 26 color "#ffffff" xmaximum 760
             null height 20
             hbox:
                 xalign 1.0
