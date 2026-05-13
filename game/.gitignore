@@ -1,0 +1,11 @@
+﻿deepseek_config.json
+*.rpyc
+*.rpyb
+cache/
+__pycache__/
+saves/
+*.swp
+*~
+.DS_Store
+log.txt
+errors.txt
