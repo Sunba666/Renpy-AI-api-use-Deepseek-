@@ -44,10 +44,20 @@ init -1 python:
     import json
     import threading
     import os
+    from ai_core import (
+        DEFAULT_MODEL,
+        SYSTEM_PROMPT,
+        VALID_EMOTIONS,
+        build_request_data,
+        escape_renpy_text_braces,
+        extract_emotion_from_json,
+        is_request_allowed,
+        split_text_into_pages,
+        trim_messages,
+    )
 
     # DeepSeek 官方 API 地址
     DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
-    SYSTEM_PROMPT = "你是一个温柔的心理咨询师"
     MAX_CHAT_TURNS = 10
     FETCH_TIMEOUT = 30
 
@@ -55,6 +65,7 @@ init -1 python:
     ai_response_text = ""
     ai_request_finished = False
     ai_request_error = ""
+    ai_request_in_progress = False
 
     # 读取 API Key（从外部配置文件）
     def load_api_key():
@@ -66,63 +77,6 @@ init -1 python:
         except Exception:
             return ""
 
-    def escape_renpy_text_braces(s):
-        """将字符串中的花括号转义，避免 Ren'Py text 把 LaTeX 等里的 {...} 当成文本标签。"""
-        if not isinstance(s, str):
-            s = str(s)
-        return s.replace("{", "{{").replace("}", "}}")
-
-    # 分页函数
-    def split_text_into_pages(text, max_chars_per_page=400):
-        if not isinstance(text, str):
-            text = str(text)
-        if not text:
-            return ["(没有内容)"]
-        pages = []
-        while len(text) > max_chars_per_page:
-            split_pos = text.rfind('。', 0, max_chars_per_page)
-            if split_pos == -1:
-                split_pos = text.rfind('，', 0, max_chars_per_page)
-            if split_pos == -1:
-                split_pos = max_chars_per_page
-            pages.append(text[:split_pos + 1])
-            text = text[split_pos + 1:]
-        if text:
-            pages.append(text)
-        return pages
-
-    API_KEY = load_api_key()
-    if not API_KEY:
-        renpy.notify("警告：找不到 deepseek_config.json 或 API Key，请创建配置文件。")
-
-    # 情绪关键词映射表（按优先级：先匹配到的情绪生效）
-    emotion_map = {
-        "happy": ["开心", "高兴", "喜欢", "爱", "棒", "好", "幸福", "笑"],
-        "sad": ["难过", "伤心", "哭", "遗憾", "失望", "痛苦", "孤独"],
-        "angry": ["生气", "愤怒", "恨", "讨厌", "可恶", "滚", "烦"],
-        "surprised": ["惊讶", "居然", "天哪", "哇", "真的吗", "什么"],
-    }
-    default_emotion = "neutral"
-    _EMOTION_ORDER = ("happy", "sad", "angry", "surprised")
-
-    def analyze_emotion(text):
-        if not text:
-            return default_emotion
-        for emotion in _EMOTION_ORDER:
-            for kw in emotion_map[emotion]:
-                if kw in text:
-                    return emotion
-        return default_emotion
-
-    def _trim_messages(messages):
-        """限制历史长度，防止 token 过多（保留最近 MAX_CHAT_TURNS 轮对话）。"""
-        max_msgs = 1 + MAX_CHAT_TURNS * 2
-        if len(messages) <= max_msgs:
-            return messages
-        if messages and messages[0]["role"] == "system":
-            return messages[:1] + messages[-(MAX_CHAT_TURNS * 2):]
-        return messages[-(MAX_CHAT_TURNS * 2):]
-
     def ai_request_thread(user_message):
         """仅在线程内做网络请求；对 store 与 UI 相关全局变量的写入一律回到主线程。"""
         err = None
@@ -131,14 +85,12 @@ init -1 python:
             messages = [{"role": "system", "content": SYSTEM_PROMPT}]
             messages.extend(list(store.conversation_history))
             messages.append({"role": "user", "content": user_message})
-            messages = _trim_messages(messages)
+            messages = trim_messages(messages, MAX_CHAT_TURNS)
 
-            data = {
-                "model": "deepseek-chat",
-                "messages": messages,
-                "temperature": 0.75,
-                "max_tokens": 1000,
-            }
+            data = build_request_data(
+                messages=messages,
+                response_format={"type": "json_object"},
+            )
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + API_KEY,
@@ -155,7 +107,7 @@ init -1 python:
             err = str(ex)
 
         def _finish():
-            global ai_response_text, ai_request_finished, ai_request_error
+            global ai_response_text, ai_request_finished, ai_request_error, ai_request_in_progress
             if err is None:
                 store.conversation_history.append({"role": "user", "content": user_message})
                 store.conversation_history.append({"role": "assistant", "content": ai_content})
@@ -165,14 +117,16 @@ init -1 python:
                 ai_request_error = err
                 ai_response_text = "[请求失败: {}]".format(err)
             ai_request_finished = True
+            ai_request_in_progress = False
 
         renpy.invoke_in_main_thread(_finish)
 
     def ask_ai_async(user_message):
-        global ai_response_text, ai_request_finished, ai_request_error
+        global ai_response_text, ai_request_finished, ai_request_error, ai_request_in_progress
         ai_response_text = ""
         ai_request_finished = False
         ai_request_error = ""
+        ai_request_in_progress = True
         threading.Thread(target=ai_request_thread, args=(user_message,), daemon=True).start()
 
     def is_ai_finished():
@@ -208,16 +162,19 @@ label ai_chat:
             e neutral "那下次再聊吧。"
             $ chatting = False
         else:
-            show screen ai_thinking_screen
-            $ ask_ai_async(player_input)
-            while not is_ai_finished():
-                $ renpy.pause(0.1)
-            hide screen ai_thinking_screen
-            $ ai_text = get_ai_response()
-            $ emo = analyze_emotion(ai_text)
-            $ renpy.show("eileen " + emo)
-            call show_paged_text(ai_text)
-            $ renpy.pause(0.2)
+            if not is_request_allowed(store.ai_request_in_progress):
+                e neutral "AI 还在思考，请稍候..."
+            else:
+                show screen ai_thinking_screen
+                $ ask_ai_async(player_input)
+                while not is_ai_finished():
+                    $ renpy.pause(0.1)
+                hide screen ai_thinking_screen
+                $ ai_text = get_ai_response()
+                $ emo = extract_emotion_from_json(ai_text)
+                $ renpy.show("eileen " + emo)
+                call show_paged_text(ai_text)
+                $ renpy.pause(0.2)
     return
 
 # 分页显示长文本

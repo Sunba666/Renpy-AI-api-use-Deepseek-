@@ -24,3 +24,8 @@
 /dialogue.tab
 /dialogue.txt
 /strings.json
+
+# Python test artifacts
+__pycache__/
+.pytest_cache/
+*.pyc

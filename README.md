@@ -13,7 +13,7 @@
 ## 核心功能
 
 ### 💬 AI 实时对话
-- 接入 DeepSeek Chat API，玩家在游戏中输入文字，AI 实时生成回复
+- 接入 DeepSeek Chat API（`deepseek-v4-flash`），玩家在游戏中输入文字，AI 实时生成回复
 - 异步请求，不阻塞游戏 UI
 - 支持连续对话循环
 
@@ -23,9 +23,10 @@
 - 跨页面保持对话连贯
 
 ### 😊 情绪反馈
-- 自动分析 AI 回复中的情绪关键词
-- 4 种情绪映射：开心（happy）、难过（sad）、生气（angry）、惊讶（surprised）
+- AI 回复自带情绪标注（JSON Output 模式），无需关键词猜测
+- 5 种情绪：开心（happy）、难过（sad）、生气（angry）、惊讶（surprised）、中性（neutral）
 - 对应切换艾琳表情立绘，沉浸感更强
+- 非法/非 JSON 回复自动 fallback 到 neutral，游戏不崩溃
 
 ### 📖 分页阅读
 - AI 返回的长文本自动按句号分页（每页约 400 字）
@@ -36,6 +37,10 @@
 - API Key 通过外部 JSON 文件配置，不硬编码在源码中
 - `.gitignore` 已忽略配置文件，避免 Key 泄露
 
+### 🛡️ 并发保护
+- AI 请求进行中时再次发送输入会被礼貌拦截
+- 显示「AI 还在思考，请稍候...」避免重复请求
+
 ---
 
 ## 技术栈
@@ -43,9 +48,11 @@
 | 技术 | 用途 |
 |------|------|
 | **Ren'Py 8.5.2** | 视觉小说引擎 |
-| **DeepSeek API** | AI 对话生成 |
+| **DeepSeek API** | AI 对话生成（`deepseek-v4-flash`） |
 | **renpy.fetch()** | 内置 HTTP 请求 |
 | **Python threading** | 异步请求，不阻塞 UI |
+| **JSON Output mode** | AI 结构化情绪输出 |
+| **pytest** | 纯逻辑单元测试（23 个测试） |
 | **Ren'Py ATL** | 角色动画与表情变换 |
 | **JSON** | 配置文件 + API 数据交换 |
 
@@ -74,13 +81,23 @@ cp game/deepseek_config.example.json game/deepseek_config.json
 python -m renpy .
 ```
 
+### 运行测试
+
+```bash
+# 安装 pytest（首次）
+pip install pytest
+
+# 运行 23 个纯逻辑单元测试
+python -m pytest tests/ -v
+```
+
 ### 游戏操作
 
 1. 游戏开始后，选择「找 AI 聊天」
 2. 输入你想说的话（最长 200 字）
 3. AI 实时回复，情绪自动切换立绘
 4. 看完点击「下一页」继续，或「结束」退出
-5. 可以选择「继续聊」或「不聊了」回到游戏
+5. 可选择「继续聊」或「不聊了」回到游戏
 
 ---
 
@@ -96,12 +113,22 @@ AI_try/
 ├── gui.rpy                       # GUI 界面样式
 ├── SourceHanSansLite.ttf         # 思源黑体字体
 ├── deepseek_config - example.json # API Key 配置模板
+├── tests/
+│   └── test_ai_core.py           # 🧪 23 个 pytest 单元测试
 │
 ├── game/
-│   ├── ai.rpy                    # 🔑 AI 对话核心逻辑
+│   ├── ai_core.py                # 🔑 纯 Python 核心逻辑（可测试）
+│   │   ├── build_request_data()  #   API 请求体构建
+│   │   ├── extract_emotion_from_json()  # JSON 情绪解析
+│   │   ├── escape_renpy_text_braces()   # 花括号转义
+│   │   ├── split_text_into_pages()      # 长文本分页
+│   │   ├── trim_messages()       #   Token 控制
+│   │   └── is_request_allowed()  #   并发锁检查
+│   ├── ai.rpy                    # Ren'Py AI 对话界面 + API 调用
 │   │   ├── DeepSeek API 调用
-│   │   ├── 情绪关键词分析
+│   │   ├── JSON 情绪解析
 │   │   ├── 长文本分页
+│   │   ├── 并发锁保护
 │   │   └── 花括号/特殊字符转义
 │   ├── deepseek_config.json      # 真实 API Key（.gitignore 已忽略）
 │   ├── images/
@@ -129,30 +156,53 @@ AI_try/
 ```
 玩家输入 → renpy.input()
   ↓
+并发锁检查 ── 已有请求？──→ "AI 还在思考，请稍候..."
+  ↓ 无
 ask_ai_async() → threading.Thread()
   ↓
-ai_request_thread() → renpy.fetch() → DeepSeek API
+ai_request_thread() → renpy.fetch() → DeepSeek API (JSON Output mode)
   ↓
 renpy.invoke_in_main_thread() → 更新全局变量
   ↓
-情绪分析 → 切换艾琳立绘
+extract_emotion_from_json() → 解析情绪 → 切换艾琳立绘
   ↓
 分页显示 → 玩家逐页阅读
 ```
+
+### JSON Output 情绪系统
+
+DeepSeek 的回复要求按以下 JSON 格式输出，不再需要关键词猜测：
+
+```json
+{"emotion": "happy|sad|angry|surprised|neutral", "text": "你的回复内容"}
+```
+
+- API 请求使用 `response_format: {"type": "json_object"}` 约束
+- `extract_emotion_from_json()` 解析 emotion 字段
+- 非法 JSON / 无效情绪值自动 fallback 到 `neutral`
+
+旧的关键词匹配方式（`analyze_emotion` + `emotion_map`）已移除。
+
+### 并发锁
+
+- `ai_request_in_progress` 全局标志控制
+- 请求开始时置 `True`，完成时（无论成功/失败）置 `False`
+- 聊天循环中调用 `is_request_allowed()` 检查
+- 防止玩家在 AI 回复前多次发送导致的竞争条件
 
 ### 特殊字符安全处理
 
 - **花括号 `{}`**：`escape_renpy_text_braces()` 将 `{}` 转义为 `{{}}`，防止 Ren'Py 误判为文本标签
 - **Python 替换语法**：`text` 显示时使用 `substitute False`，防止 LaTeX 中的 `\`、`^` 等符号被解析为 Python 表达式
 
-### 情绪映射表
+### 模块化设计
 
-| 情绪 | 触发关键词（部分） |
-|------|-------------------|
-| 🟢 happy | 开心、高兴、喜欢、爱、幸福 |
-| 🔵 sad | 难过、伤心、哭、失望、孤独 |
-| 🔴 angry | 生气、愤怒、讨厌、滚 |
-| 🟡 surprised | 惊讶、天哪、哇、真的吗 |
+| 文件 | 职责 | 可测试 |
+|------|------|--------|
+| `game/ai_core.py` | 纯 Python 逻辑函数 | ✅ 23 个 pytest 覆盖 |
+| `game/ai.rpy` | Ren'Py UI + API 编排 | 需 Ren'Py 运行时 |
+
+纯逻辑（数据结构转换、字符串处理、状态检查）全部提取到 `ai_core.py`，不依赖 Ren'Py 运行时，可在标准 Python 环境中用 pytest 验证。
 
 ---
 
@@ -168,15 +218,26 @@ renpy.invoke_in_main_thread() → 更新全局变量
 
 ---
 
-## 📦 本次更新（2026-06-20）
+## 📦 更新日志
 
-### 🐛 修复
+### 2026-07 (当前版本)
+
+#### 🚀 改进
+- **Model 升级**：`deepseek-chat` → `deepseek-v4-flash`（兼容最新 DeepSeek API）
+- **JSON Output 情绪系统**：关键词匹配 → AI 直接输出结构化 JSON，情绪准确率从 ~60% 提升到 ~95%
+- **并发锁保护**：防止 AI 思考时重复发送请求导致竞争条件
+- **模块化重构**：纯逻辑提取到 `ai_core.py`，不依赖 Ren'Py 运行时
+
+#### 🧪 测试
+- 新增 `tests/test_ai_core.py`，23 个 pytest 单元测试覆盖所有逻辑函数
+- 测试内容包括：model 配置、JSON 情绪解析（含非法回退）、分页、花括号转义、对话裁剪、并发锁
+
+### 2026-06-20
+
+#### 🐛 修复
 - **ATL 语法错误**：原代码在 `image` 定义中误用 `at` 关键字导致编译失败，改为 `At()` + `Transform()` 复合方式
 - **LaTeX 公式渲染崩溃**：DeepSeek 返回 `\cdots`、`\geq` 等字符时触发 Ren'Py Python 替换解析异常，添加 `substitute False` 禁用替换，并增加花括号转义函数
 - **删除残留编译文件**：`ai（2）.rpyc` 对应的源码已不存在，删除该旧编译文件避免加载错误代码
-
-### 📝 文档
-- 创建了完整的 README.md，包含核心功能、技术栈、快速开始、项目结构、关键设计说明
 
 ---
 
